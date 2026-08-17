@@ -1,0 +1,403 @@
+###Половина правил написана криво и неактуально но мне пофиг что вы мне сделаете я в другом городе + в интернете
+
+// ============================================
+// SECTION: TARGETS
+// ============================================
+
+loki.write "default" {
+    endpoint {
+        url = "http://$$$:3100/loki/api/v1/push"
+    }
+}
+
+// ============================================
+// SECTION: TRACING (SOON)
+// ============================================
+
+// ============================================
+// SECTION: ЕДИНЫЙ ИСТОЧНИК ЛОГОВ
+// ============================================
+
+local.file_match "all_logs" {
+    path_targets = [{
+        __address__ = "localhost",
+        __path__    = "/var/log/alloy/combined.log",
+        instance    = "system-logs",          // Базовый лейбл (будет перезаписан)
+        job         = string.format("%s-logs", constants.hostname),
+    }]
+}
+
+loki.source.file "all_logs" {
+    targets     = local.file_match.all_logs.targets
+    forward_to  = [loki.process.logs_parser.receiver]
+    tail_from_end = true
+}
+
+// ============================================
+// SECTION: ЕДИНЫЙ ПРОЦЕССОР ВСЕХ ЛОГОВ
+// ============================================
+
+loki.process "logs_parser" {
+    
+    // ---------- 1. SSH ЛОГИ (Failed password) ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "sshd\\[\\d+\\]:.*Failed password"`
+        
+        stage.regex {
+            expression = `^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2})\s+(?P<hostname>\S+)\s+sshd\[\d+\]:\s+Failed password for (?:\S+ +)*(?P<username>\S+) from (?P<ip>\d+\.\d+\.\d+\.\d+) port \d+ ssh2`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "ssh-logs",        // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+		timestamp = "timestamp",
+                username   = "username",      // ВОССТАНОВЛЕНО
+                ip         = "ip",            // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО (из лога)
+                log_type   = "ssh-failed",    // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 2. SSH ЛОГИ (Accepted password) ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "sshd\\[\\d+\\]:.*Accepted password"`
+        
+        stage.regex {
+            expression = `^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2})\s+(?P<hostname>\S+)\s+sshd\[\d+\]:\s+Accepted password for (?:\S+ +)*(?P<username>\S+) from (?P<ip>\d+\.\d+\.\d+\.\d+) port \d+ ssh2`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "ssh-logs",        // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+		timestamp = "timestamp",
+                username   = "username",      // ВОССТАНОВЛЕНО
+                ip         = "ip",            // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "ssh-accepted",  // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 3. SSH ЛОГИ  ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "sshd\\[\\d+\\]:.*session"`
+        
+        stage.regex {
+            expression = `.*sshd\s*\[\d+\]`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "ssh-logs",        // ВОССТАНОВЛЕНО
+            }
+        }
+        
+    }
+    
+    // ---------- 4. AUDITD ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "auditd"`
+        
+        stage.regex {
+                    expression = `^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2})\s+(?P<hostname>\S+)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "auditd-logs",     // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+		timestamp = "timestamp",
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "auditd",        // НОВЫЙ лейбл
+            }
+        }
+    }	
+    
+    // ---------- 5. SUDO ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "sudo:.*"`
+        
+        stage.regex {
+            expression = `.*sudo:.*`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "sudo-logs",       // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                log_type   = "sudo",          // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 6. SYSTEMD ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "systemd\\[\\d+\\]:"`
+        
+        stage.regex {
+                    expression = `^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}(?:\.\d+)?)\s+(?P<hostname>\S+)\s+systemd(?:\[\d+\])?:`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "systemd-logs",    // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                timestamp = "timestamp",
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "systemd",       // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 7. CROND ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "crond"`
+        
+        stage.regex {
+            expression = `.*crond\[\d+\]:\s+(?P<action>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "crond-logs",      // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                action     = "action",        // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "crond",         // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 8. APT-GET ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "apt-get"`
+        
+        stage.regex {
+            expression = `.*(apt-get|apt|dpkg):\s+(?P<action>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "apt-get-logs",    // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                action     = "action",        // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "apt",           // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 9. SU ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |~ "su\\[\\d+\\]:"`
+        
+        stage.regex {
+            expression = `.*su*.`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "su-logs",         // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                username   = "username",      // ВОССТАНОВЛЕНО
+                action     = "action",        // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "su",            // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 10. KESL ЛОГИ (Kaspersky) ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "kesl\\[\\d+\\]:"`
+        
+        stage.regex {
+            expression = `.*kesl(?:\d+)?:\s+(?P<level>\w+):\s+(?P<message>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "kesl-logs",       // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                level      = "level",         // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "kesl",          // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 11. KLNAGENT ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "klnagent\\[\\d+\\]:"`
+        
+        stage.regex {
+            expression = `.*klnagent:\s+(?P<message>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "klnagent-logs",   // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "klnagent",      // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 12. PYTHON3 ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "python3"`
+        
+        stage.regex {
+            expression = `.*python3:\s+(?P<message>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "python3-logs",    // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "python3",       // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 13. RSYSLOG ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "rsyslogd\\[\\d+\\]:"`
+        
+        stage.regex {
+            expression = `.*rsyslogd\[\d+\]:\s+(?P<message>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "rsyslog-daemon-logs",  // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "rsyslog",       // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 14. SYSTEMD-LOGIND ЛОГИ ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "systemd-logind\\[\\d+\\]:"`
+        
+        stage.regex {
+            expression = `.*systemd-logind\[\d+\]:\s+(?P<action>.*)`
+        }
+        
+        stage.static_labels {
+            values = {
+                instance = "logind-logs",     // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                action     = "action",        // ВОССТАНОВЛЕНО
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "logind",        // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- 15. WINDOWS ЛОГИ (MSWinEventLog) ----------
+    stage.match {
+        selector = `{instance="system-logs"} |= "MSWinEventLog"`
+        
+        stage.regex {
+            expression = `.*(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}(?:\.\d+)?)\s+(?P<hostname>\S+)\s+MSWinEventLog#011(?P<event_version>\d+)#011(?P<log_name>[^#]+)#011(?P<record_number>\d+)#011(?P<time_generated>[^#]+)#011(?P<event_id>\d+)#011(?P<source_name>[^#]+)#011(?P<user>[^#]*)#011(?P<user_domain>[^#]*)#011(?P<severity>[^#]+)#011(?P<computer_name>[^#]+)#011(?P<message>.+)`
+        }
+
+        
+        stage.static_labels {
+            values = {
+                instance = "windows-logs",    // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+            hostname        = "hostname",
+            log_name        = "log_name",
+            event_id        = "event_id",
+            source_name     = "source_name",
+            severity        = "severity",
+            }
+        }
+    }
+    
+    // ---------- 16. ВСЕ ОСТАЛЬНЫЕ ЛОГИ (catch-all) ----------
+    stage.match {
+        selector = `{instance="system-logs"}`
+        
+        stage.static_labels {
+            values = {
+                instance = "other-logs",      // ВОССТАНОВЛЕНО
+            }
+        }
+        
+        stage.labels {
+            values = {
+                hostname   = "hostname",      // ВОССТАНОВЛЕНО
+                log_type   = "other",         // НОВЫЙ лейбл
+            }
+        }
+    }
+    
+    // ---------- ОТПРАВКА В LOKI ----------
+    forward_to = [loki.write.default.receiver]
+}
