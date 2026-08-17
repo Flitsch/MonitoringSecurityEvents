@@ -1,0 +1,206 @@
+# AUDITD RULES
+#В данном файле описываются правила которые срабатывают при изменении доступов,suid/gid битов, битов доступа, смене владельцев, групп и так далее
+
+#Смена пользователя/группы/битов доступа от рута
+-a exit,always -F arch=b64 -S chmod -S chown -F euid=0 -k priv-perm-change
+
+-a exit,always -F arch=b64 -S chmod -S chown -F dir=/etc -k priv-perm-etc-change
+-a exit,always -F arch=b64 -S chmod -S chown -F dir=/root -k priv-perm-root-change
+ 
+#Неудачная смена пользователя/группы/битов доступа
+-a exit,always -F arch=b64 -S chmod -F exit=-1 -k error-chmod
+-a exit,always -F arch=b64 -S chown -F exit=-1 -k error-chown
+
+#Проверка смежных команд связанных с chmod,chown
+-a exit,always -F arch=b64 -S execve -F exe=/bin/chgrp -k chgrp-exec
+-a exit,always -F arch=b64 -S execve -F exe=/usr/bin/setfacl -k setfacl-exec
+-a exit,always -F arch=b64 -S execve -F exe=/usr/bin/getfacl -k getfacl-exec
+
+#Проверка на изменение бинарников
+-w /bin/chmod -p wa -k bin-chmod-change
+-w /bin/chown -p wa -k bin-chown-change
+-w /bin/chgrp -p wa -k bin-chgrp-change
+-w /usr/bin/setfacl -p wa -k bin-setfacl-change
+-w /usr/bin/getfacl -p wa -k bin-getfacl-change
+#В данном файле описываются правила для cron,at,auditctl и insmod/rmmod
+
+#crontab,at
+-w /etc/crontab -p wa -k cron_etc_change 
+-w /etc/cron.d/ -p wa -k cron_d_change   
+-a exit,always -F arch=b64 -F exe=/usr/bin/crontab -S execve -k crontab-exec
+-a exit,always -F arch=b64 -F exe=/usr/bin/at -S execve -k at-exec
+
+#auditctl
+-a exit,always -F arch=b64 -F exe=/sbin/auditctl -S execve -k auditctl-exec
+-w /etc/audit/audit.rules -p wa -k auditd-rules-change
+
+#insmod,rmmod
+-a exit,always -F arch=b64 -S init_module -k init-module-kernel
+-a exit,always -F arch=b64 -S delete_module  -k delete-module-kernel
+-a exit,always -F arch=b64 -S finit_module -k init-module-kernel
+#В данном файле описываются правила для следующих событий: монтирование/размонтирование файловых систем, создание символических ссылок
+#выполнение команд через интерпретаторы кода, подключение usb устройств
+
+#mount/umount
+-a exit,always -F arch=b64 -S mount -F dir=/mnt -k mount-event
+-a exit,always -F arch=b64 -S umount2 -F dir=/mnt -k umount-event
+
+#symlink
+-a exit,always -F arch=b64 -S symlink -k symb-link
+-a exit,always -F arch=b64 -S symlinkat -k symb-link
+
+#interpr
+
+-a exit,always -F arch=b64 -F exe=/usr/bin/apt-get -S execve -k apt-get-using
+
+#USB devices
+-a exit,always -F arch=b64 -S mknod,mknodat -k dev-usb-connect
+# В данном файле лежат правила аудита подключений по SSH и локальная смена пользователей
+
+#SSH Auth
+-a exit,always -F arch=b64 -S connect -F exe=/usr/bin/ssh -k ssh-auth
+
+#Possible SSH Tunnel (bind)
+-a exit,always -F arch=b64 -S bind -F a2=0x10 -F exe=/usr/sbin/sshd -k ssh-tun-bind-ipv4
+-a exit,always -F arch=b64 -S bind -F a2=0x1c -F exe=/usr/sbin/sshd -k ssh-tun-bind-ipv6
+
+#Possible SSH Tunnel (connect)
+-a exit,always -F arch=b64 -S connect -F a2=0x10 -F exe=/usr/sbin/sshd -k ssh-tun-connect-ipv4
+-a exit,always -F arch=b64 -S connect -F a2=0x1c -F exe=/usr/sbin/sshd -k ssh-tun-connect-ipv6
+
+
+EOF
+
+# Динамическое добавление правил для .ssh/config всех пользователей
+echo "# Динамическое добавление правил для .ssh/config всех пользователей" >> "$AUDIT_RULES_FILE"
+for user_home in /home/*/.ssh/config; do
+    if [ -f "$user_home" ]; then
+        echo "-w $user_home -p wa -k ssh-user-config-change" >> "$AUDIT_RULES_FILE"
+    fi
+done
+
+cat >> "$AUDIT_RULES_FILE" << 'EOF'
+
+#SU Auth
+-a exit,always -F arch=b64 -S execve -F exe=/bin/su -k su-auth
+
+#UID Change
+-a exit,always -F arch=b64 -S setuid -k su-privilege
+-a exit,always -F arch=b64 -S setreuid -k su-privilege
+
+#SU files change
+-w /bin/su -p wa -k su-bin-change
+-w /etc/control.d/facilities/su -p wa -k su-config-change
+-w /etc/pam.d/su -p wa -k su-config-change
+#В данном файле будут описаны правила которые отслеживают открытие портов и изменение сетевой конфигурации хоста
+
+#Запуск бинарников ss для просмотра сетевой статистики
+-a exit,always -F arch=b64 -F exe=/usr/bin/ss -S execve -k ss-exec
+-a exit,always -F arch=b64 -F exe=/usr/sbin/ss -S execve -k ss-exec
+-a exit,always -F arch=b64 -F exe=/bin/netstat -S execve -k netstat-exec
+
+#Отслеживание изменений файлов с сетевой конфигурацией
+-w /etc/sysctl.conf -p wa -k systctl-conf-change
+-w /etc/net/ifaces -p wa -k ifaces-conf-change
+-w /etc/NetworkManager -p wa -k netmanager-change
+-w /etc/net/ifaces/default/fw/iptables -p wa -k fw-change
+-w /etc/sysconfig/iptables -p wa -k fw-config-change
+
+#Отслеживание запуска файрволла
+-a exit,always -F arch=b64 -F exe=/sbin/iptables -S execve -k iptables-exec
+-a exit,always -F arch=b64 -F exe=/sbin/ip6tables -S execve -k ip6tables-exec
+-a exit,always -F arch=b64 -F exe=/sbin/iptables-save -S execve -k iptables-rules-save
+-a exit,always -F arch=b64 -F exe=/sbin/iptables-restore -S execve -k iptables-restore-rules
+-a exit,always -F arch=b64 -F exe=/sbin/iptables-apply -S execve -k iptables-rules-apply
+
+
+#Отслеживание бинарников
+-w /usr/bin/ss -p wa -k ss-bin-change
+-w /usr/sbin/ss -p wa -k ss-bin-change
+-w /bin/netstat -p wa -k netstat-change
+-w /sbin/iptables -p wa -k iptables-change
+-w /sbin/ip6tables -p wa -k ip6tables-change
+-w /sbin/iptables-save -p wa -k iptables-save-change
+-w /sbin/iptables-restore -p wa -k iptables-restore-change
+-w /sbin/iptables-apply -p wa -k iptables-apply-change
+
+#route
+-a exit,always -F arch=b64 -F exe=/bin/route -S execve -k route-exec
+-a exit,always -F arch=b64 -F exe=/sbin/route -S execve -k route-exec
+-w /bin/route -p wa -k route-bin-change
+-w /sbin/route -p wa -k route-bin-change
+
+-w /proc/net/ipv6_route -p wa -k ipv6-route-change
+-w /proc/net/route -p wa -k route-conf-change
+
+#ip route
+-a exit,always -F arch=b64 -F exe=/usr/bin/ip -S execve -k ip-route-exec
+-a exit,always -F arch=b64 -F exe=/sbin/ip -S execve -k ip-route-exec
+-w /usr/bin/ip -p wa -k ip-bin-change
+-w /sbin/ip -p wa -k ip-bin-change
+
+
+#В данном файле описаны правила которые затрагивают моменты с отключением журналирования, чтением и изменением логов
+
+#systemctl (остановка auditd и rsyslog) 
+-a exit,always -F arch=b64 -F exe=/usr/bin/systemctl -S execve -k systemctl-stop
+-a exit,always -F arch=b64 -F exe=/bin/systemctl -S execve -k systemctl-stop
+-a exit,always -F arch=b64 -F exe=/sbin/systemctl -S execve -k systemctl-stop
+
+-a exclude,always -F arch=b64 -F exe=/sbin/systemd 
+-w /usr/bin/systemctl -p wa -k systemctl-bin-change
+-w /bin/systemctl -p wa -k systemctl-bin-change
+-w /sbin/systemctl -p wa -k systemctl-bin-change
+
+-a exit,always -F arch=b64 -F dir=/var/log -F exe=/bin/rm -S execve -k rm-var-exec
+-w /var/log/audit/ -p wa -k audit_log_access
+-a always,exit -F arch=b64 -F dir=/var/log -S unlink -S unlinkat -S rename -S renameat -S rmdir -k rm-file-log
+
+
+#В данном файле находятся правила которые отслеживают всё что связаное с изменением пользователей,паролей,групп + запуск команд с приоритетом
+
+#Отслеживание изменений в файлах sudoers (те кто могут исполнять команды от sudo)
+-w /etc/sudoers -p rwa -k possible-priv-esc
+-w /etc/sudoers.d -p rwa -k possible-priv-esc
+
+#Отслеживание запуска бинарников для изменения пользователей,удаления,добавления групп
+-w /usr/sbin/usermod -p x -k user-modification  
+-w /usr/sbin/userdel -p x -k user-del  
+-w /usr/sbin/groupadd -p x -k group-add  
+-w /usr/sbin/groupmod -p x -k group-modification   
+
+#Отслеживание изменения бинарников для изменения пользователей,удаления,добавления групп
+-w /usr/sbin/usermod -p wa -k user-modification-write
+-w /usr/sbin/userdel -p wa -k user-del-write
+-w /usr/sbin/groupadd -p wa -k group-add-write
+-w /usr/sbin/groupmod -p wa -k group-modification-write
+
+#Отслеживание записи в директории с пользователями,паролями,группами
+-w /etc/group -p wa -k write-etcgroup  
+-w /etc/passwd -p wa -k write-etcpasswd  
+-w /etc/gshadow -k write-etcgroup  
+-w /etc/shadow -k write-etcpasswd
+
+#Отслеживание запуска бинарников на добавление пользователей и изменение их паролей
+-w /usr/sbin/useradd -p x -k user-add  
+-w /usr/sbin/adduser -p x -k user-add
+-w /usr/bin/passwd -p x -k passwd-modification
+
+#Отслеживание запуска бинарников на добавление пользователей и изменение их паролей
+-w /usr/sbin/useradd -p wa -k user-add-write
+-w /usr/sbin/adduser -p wa -k user-add-write
+-w /usr/bin/passwd -p wa -k passwd-modification-write
+
+#Отслеживание файлов связаных с sudo
+-w /etc/sudo.conf -p rwa -k sudo-conf
+-w /etc/control.d/facilities/sudoreplay -p wa -k sudo-replay
+-w /etc/control.d/facilities/sudopw -p wa -k sudo-pw
+-w /etc/control.d/facilities/sudoers -p wa -k sudo-ers
+-w /etc/control.d/facilities/sudowheel -p wa -k sudo-wheel
+-w /etc/control.d/facilities/sudo -p wa -k sudo-sudo
+
+#Отслеживание команд запущенных от рута
+-a exit,always -F arch=b64 -F exe=/usr/bin/sudo -S execve -k sudo-exec
+
+-w /usr/bin/sudo -p x -k sudo-exec
+-w /usr/bin/sudo -p wa -k sudo-change
